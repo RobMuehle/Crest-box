@@ -18,18 +18,8 @@ The default settings are:
 
 Note that there is no test of a correct setup of the calculations when a user-defined input file for the 'define' routine of Turbomole is passed to the script via option '--input'. If in doubt, the option '--level' with parameter '1' can be used (i.e., preparation but no submission) to precheck the outcome of 'define'. If everything is correct, the calculation(s) can be submitted manually using the created batch file (cmd: sbatch|qsub CREST_OPT_ARRAY). Note also that the evaluation routine (--eval) can already be called during runtime to get preliminary results. However, a successfully completed optimization of at least the reference crest structure is a mandatory prerequisite.  
 
-Default settings:  
-   Max. N       :  100  
-   E-thresh.    :  10.0 kJ/mol  
-   Program      :  Turbomole  
-   Model        :  MARIJ-BP86-D3BJ/def2-SVP, closed-shell  
-   Opt. param.  :  -c 400 -gcart 4 -energy 7  
-   SCF param.   :  grid m5, conv. 1.d-9  
-   D3(BJ)       :  switched on  
-   COSMO        :  not included  
-
 OPTIONS  
-      -h | --help           : help screen  
+(&nbsp;)(&nbsp;)(&nbsp;)(&nbsp;)      -h | --help           : help screen  
     -man | --man            : extended help screen  
       -q | --quiet          : supress standard screen output  
      -n <int>               : maximum number of processed crest structures (default: 15)  
