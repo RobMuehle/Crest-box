@@ -19,17 +19,17 @@ The default settings are:
 Note that there is no test of a correct setup of the calculations when a user-defined input file for the 'define' routine of Turbomole is passed to the script via option '--input'. If in doubt, the option '--level' with parameter '1' can be used (i.e., preparation but no submission) to precheck the outcome of 'define'. If everything is correct, the calculation(s) can be submitted manually using the created batch file (cmd: sbatch|qsub CREST_OPT_ARRAY). Note also that the evaluation routine (--eval) can already be called during runtime to get preliminary results. However, a successfully completed optimization of at least the reference crest structure is a mandatory prerequisite.  
 
 OPTIONS  
-&nbsp;&nbsp;&nbsp;&nbsp;      -h | --help           : help screen  
-    -man | --man            : extended help screen  
-      -q | --quiet          : supress standard screen output  
-     -n <int>               : maximum number of processed crest structures (default: 15)  
-     -nf <int>              : enforce processing of <int> crest structures, ignoring any given energy threshold  
-     -ns | --n_start <int>  : process crest structures starting with the <int>-th entry  
-     -e <float>             : crest energy threshold (in kJ/mol) for the extraction of structures (default: 10.0) E_rel calculated with reference to the minimum-energy (i.e., first) crest structure  
-     -ef <float>            : enforce processing of structures until energy threshold <float> (in kJ/mol) is reached  
-      -i | --input <string> : use local input file <string> for 'define' sessions (default: standard-input)  
-     -pi | --print_i        : print standard input for 'define' to file 'input'  
-    -lvl | --level <int>    : level of processing (default: 1)  
+&emsp;      -h | --help           : help screen  
+&emsp;    -man | --man            : extended help screen  
+&emsp;      -q | --quiet          : supress standard screen output  
+&emsp;     -n <int>               : maximum number of processed crest structures (default: 15)  
+&emsp;     -nf <int>              : enforce processing of <int> crest structures, ignoring any given energy threshold  
+&emsp;     -ns | --n_start <int>  : process crest structures starting with the <int>-th entry  
+&emsp;     -e <float>             : crest energy threshold (in kJ/mol) for the extraction of structures (default: 10.0) E_rel calculated with reference to the minimum-energy (i.e., first) crest structure  
+&emsp;     -ef <float>            : enforce processing of structures until energy threshold <float> (in kJ/mol) is reached  
+&emsp;      -i | --input <string> : use local input file <string> for 'define' sessions (default: standard-input)  
+&emsp;     -pi | --print_i        : print standard input for 'define' to file 'input'  
+&emsp;    -lvl | --level <int>    : level of processing (default: 1)  
                                0 = only extract crest structures to individual xyz files  
                                1 = extract crest structures and prepare calculations, but do not submit them to the queueing system; recommended for prechecking the outcome of 'define' and/or manually adjusting the batch file 'CREST_OPT_ARRAY' prior to submission  
                                2 = extract crest structures, prepare and submit calculations  
