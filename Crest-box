@@ -1,0 +1,1437 @@
+#!/bin/bash
+# Last modified 06.06.24
+# R. Mueller
+
+
+source=`pwd`
+
+
+usagemsg_Crest-box() {
+echo -e "\n\n USAGE\n\n    Crest-box [OPTIONS...]\n\n"
+echo -e " DESCRIPTION"
+echo -e ""
+echo -e "    Main purpose: Extract cartesian coordinates from a XTB or CREST output file ('xtb.trj' or"
+echo -e "    'crest_conformers.xyz'), and prepare and submit Turbomole or Orca calculations for each of"
+echo -e "    the extracted structures.\n"
+if [[ "${1}" == "extended" ]]; then
+echo -e "    The default mode of execution, which can largely be adjusted by the user, is the extraction of"
+echo -e "    cartesian coordinates until either a preset number of structures has been processed, or a defined"
+echo -e "    energy threshold with respect to the minimum-energy (i.e., first) crest conformer is reached (whichever"
+echo -e "    occurs first). For each structure an optimization using Turbomole will be prepared, employing either"
+echo -e "    predefined options and parameters or corresponding user-defined standards. After setup of all"
+echo -e "    calculations is completed, they are submitted as job array to the batch system.\n"
+echo -e "    The default settings are:\n"
+echo -e "    Max. N(crest structures)        :  100                                  (adjustable via '-n')"
+echo -e "    E-thresh. (rel. to crest min.)  :  10.0 kJ/mol                          (adjustable via '-e')"
+echo -e "    Computational model             :  MARIJ-BP86-D3BJ/def2-SVP, closed-s.  (modifiable via '--input': provide custom 'define' input file)"
+echo -e "    Turbomole opt. param. (jobex)   :  -c 400 -gcart 4 -energy 7            (modifiable by using '--level 1' and editing of the batch file)"
+echo -e "    Turbomole scf param.            :  grid m5, conv. 1.d-9                 (adjustable via '--sconv' and '--sgrid)"
+echo -e "    D3(BJ) disp. correction         :  switched on                          (use '--nodisp' to switch off)"
+echo -e "    COSMO solvation model           :  not included                         (use '--cosmo' to include)\n"
+echo -e "    Note that there is no test of a correct setup of the calculations when a user-defined input file"
+echo -e "    for the 'define' routine of Turbomole is passed to the script via option '--input'. If in doubt, the"
+echo -e "    option '--level' with parameter '1' can be used (i.e., preparation but no submission) to precheck the"
+echo -e "    outcome of 'define'. If everything is correct, the calculation(s) can be submitted manually using"
+echo -e "    the created batch file (cmd: sbatch|qsub CREST_OPT_ARRAY)."
+echo -e "    Note also that the evaluation routine (--eval) can already be called during runtime to get preliminary"
+echo -e "    results. However, a successfully completed optimization of at least the reference crest structure is a"
+echo -e "    mandatory prerequisite.\n"
+else
+echo -e "    Default settings:\n"
+echo -e "    Max. N       :  100"
+echo -e "    E-thresh.    :  10.0 kJ/mol"
+echo -e "    Program      :  Turbomole"
+echo -e "    Model        :  MARIJ-BP86-D3BJ/def2-SVP, closed-shell"
+echo -e "    Opt. param.  :  -c 400 -gcart 4 -energy 7"
+echo -e "    SCF param.   :  grid m5, conv. 1.d-9"
+echo -e "    D3(BJ)       :  switched on"
+echo -e "    COSMO        :  not included\n"
+fi
+echo -e "\n OPTIONS\n"
+echo -e "        -h | --help            : help screen"
+echo -e "      -man | --man             : extended help screen"
+echo -e "        -q | --quiet           : supress standard screen output"
+echo -e "        -n <int>               : maximum number of processed crest structures (default: 15)"
+echo -e "       -nf <int>               : enforce processing of <int> crest structures, ignoring any given energy threshold"
+echo -e "       -ns | --n_start <int>   : process crest structures starting with the <int>-th entry"
+echo -e "        -e <float>             : crest energy threshold (in kJ/mol) for the extraction of structures (default: 10.0)"
+echo -e "                                 E_rel calculated with reference to the minimum-energy (i.e., first) crest structure"
+echo -e "       -ef <float>             : enforce processing of structures until energy threshold <float> (in kJ/mol) is reached"
+echo -e "        -i | --input <string>  : use local input file <string> for 'define' sessions (default: standard-input)"
+echo -e "       -pi | --print_i         : print standard input for 'define' to file 'input'"
+echo -e "      -lvl | --level <int>     : level of processing (default: 1)"
+echo -e "                                 0 = only extract crest structures to individual xyz files"
+echo -e "                                 1 = extract crest structures and prepare calculations, but do not submit them to the queueing system; recommended for"
+echo -e "                                     prechecking the outcome of 'define' and/or manually adjusting the batch file 'CREST_OPT_ARRAY' prior to submission"
+echo -e "                                 2 = extract crest structures, prepare and submit calculations"
+echo -e "      -nod | --nodisp          : turn off inclusion of D3(BJ) dispersion correction"
+echo -e "             --cosmo <float>   : include COSMO solvation with epsilon value <float>"
+echo -e "             --sconv <int>     : set convergence threshold 1.d-X for the SCF iterations; the default value is X = 9"
+echo -e "             --sgrid [m]<int>  : set DFT grid size [m]X; the default grid is a modified type grid with X = 5, i.e., m5"
+echo -e "       -pi | --print_n <int>   : print E_rel for the first <int> crest structures to screen"
+echo -e "       -pe | --print_e <float> : print E_rel for crest structures to screen until threshold <float> (in kJ/mol) is reached"
+echo -e "             --nosort          : omit additional sorting of conformers (with respect to DFT E_rel energies) when performing '--eval'"
+echo -e "      -ref | --reference       : set reference structure for the calculation of relative DFT energies when performing '--eval' (default: 1)"
+echo -e "     -eval | --eval <string>   : perform a (re-)evaluation of the conformer optimizations (during or post runtime) (default: extra)"
+echo -e "                                 sparse = evaluate E_rel only"
+echo -e "                                 normal = evaluate E_rel and write optimized structures to file"
+echo -e "                                 extra  = evaluate E_rel, write optimized structures to file, and create Molden input files\n"
+echo -e "     -orca | --orca            : use ORCA instead of Turbomole v7.5.1"
+}
+
+
+# Specific user email and Turbomole/Orca settings for SLURM environment
+email="user@inet"
+tbm_module="TURBOMOLE/7.6.1"
+orca_module="ORCA"
+
+
+# Declaration of some variables
+force_n="false"
+force_e="false"
+no_info="false"
+no_disp=""
+epsilon=""
+print_n=""
+print_e=""
+print_i=""
+print_ic=""
+eval=""
+sorting="true"
+conf_array=()
+maxcore="50"
+maxri="50"
+use_orca="false"
+restart="false"
+properties="false"
+
+
+# Parsing of arguments
+while [ $# -gt 0 ]
+do
+   case "$1" in
+
+    -h|-help|--help )  usagemsg_Crest-box; exit 0;;
+
+         -man|--man )  usagemsg_Crest-box extended | less; exit 0;;
+
+         -q|--quiet )  no_info="true"; shift;;
+
+                 -n )  [ -z ${2} ] && { echo -e "\n Error option -n: integer parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          nr_struc=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option -n: '${2}' not an integer\n"; exit 1
+                       fi;;
+
+      -nf|--n_force )  [ -z ${2} ] && { echo -e "\n Error option -nf|--n_force: integer parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          force_nr_struc=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option -nf|--n_force: '${2}' not an integer\n"; exit 1
+                       fi
+                       force_n="true";;
+
+      -ns|--n_start )  [ -z ${2} ] && { echo -e "\n Error option --n_start: integer parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          start_point=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option -n_start: '${2}' not an integer\n"; exit 1
+                       fi;;
+
+                 -e )  [ -z ${2} ] && { echo -e "\n Error option -e: parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          E_threshold=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option -e: '${2}' not a number\n"; exit 1
+                       fi;;
+
+      -ef|--e_force )  [ -z ${2} ] && { echo -e "\n Error option -ef|--e_force: parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          E_threshold=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option -ef|--e_force: '${2}' not a number\n"; exit 1
+                       fi
+                       force_e="true";;
+
+          -c|--conf )  [ -z ${2} ] && { echo -e "\n Error option -c|--conf: list of integers required\n"; exit 1; }
+                       if grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          echo -e "\n Invalid argument for option -c|--conf: '${2}' not a list of integers\n"; exit 1
+                       else
+                          user_conf_list="${2}"
+                          conf_list_unsorted=$( echo ${user_conf_list} | sed 's/,/ /g' )
+                          for element in ${conf_list_unsorted}; do
+                             if grep "-" <<< ${element} &> /dev/null; then
+                                tmp_seq=$( echo ${element} | sed 's/-/ /g' )
+                                start_seq=$( echo ${tmp_seq} | awk '{print $1}' )
+                                end_seq=$( echo ${tmp_seq} | awk '{print $2}' )
+                                for element2 in $( seq ${start_seq} ${end_seq} ); do
+                                   conf_array_unsorted=( ${conf_array_unsorted[*]} ${element2} )
+                                done
+                             else
+                                conf_array_unsorted=( ${conf_array_unsorted[*]} ${element} )
+                             fi
+                          done
+                          IFS_backup="$IFS"; IFS=$'\n'; conf_array=( $(sort -g <<< "${conf_array_unsorted[*]}" ) ); IFS="$IFS_backup"
+                       fi
+                       shift 2;;
+
+   -cf|--conf_force )  [ -z ${2} ] && { echo -e "\n Error option -c|--conf: list of integers required\n"; exit 1; }
+                       if grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          echo -e "\n Invalid argument for option -c|--conf: '${2}' not a list of integers\n"; exit 1
+                       else
+                          user_conf_list="${2}"
+                          conf_list_unsorted=$( echo ${user_conf_list} | sed 's/,/ /g' )
+                          for element in ${conf_list_unsorted}; do
+                             if grep "-" <<< ${element} &> /dev/null; then
+                                tmp_seq=$( echo ${element} | sed 's/-/ /g' )
+                                start_seq=$( echo ${tmp_seq} | awk '{print $1}' )
+                                end_seq=$( echo ${tmp_seq} | awk '{print $2}' )
+                                for element2 in $( seq ${start_seq} ${end_seq} ); do
+                                   conf_array_unsorted=( ${conf_array_unsorted[*]} ${element2} )
+                                done
+                             else
+                                conf_array_unsorted=( ${conf_array_unsorted[*]} ${element} )
+                             fi
+                          done
+                          IFS_backup="$IFS"; IFS=$'\n'; conf_array=( $(sort -g <<< "${conf_array_unsorted[*]}" ) ); IFS="$IFS_backup"
+                       fi
+                       force_n="true"
+                       shift 2;;
+
+         -i|--input )  [ -z ${2} ] && { echo -e "\n Error option --input: file-name argument required\n"; exit 1; }
+                       [ ! -s ${source}/${2} ] && { echo -e "\n '${2}' not found or empty\n"; exit 1; }
+                       define_input=${2}; shift 2
+                       def_inp="true";;
+
+          -r|--read )  [ -z ${2} ] && { echo -e "\n Error option --read: file-name argument required required\n"; exit 1; }
+                       [ ! -s ${source}/${2} ] && { echo -e "\n '${2}' not found or empty\n"; exit 1; }
+                       file="${2}"; shift 2;;
+
+       -lvl|--level )  [ -z ${2} ] && { echo -e "\n Error option --level: integer argument required\n"; exit 1; }
+                       if grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          echo -e "\n Invalid argument for option --level: '${2}' not a number\n"; exit 1
+                       elif [ ${2} -eq 0 ] || [ ${2} -eq 1 ] || [ ${2} -eq 2 ]; then
+                          level=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option --level: '${2}' out of range\n"; exit 1
+                       fi;;
+
+      -nod|--nodisp )  no_disp="true"; shift;;
+
+            --cosmo )  [ -z ${2} ] && { echo -e "\n Error option --cosmo: epsilon parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          epsilon=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option --cosmo: '${2}' not a number\n"; exit 1
+                       fi;;
+
+        -sc|--sconv )  [ -z ${2} ] && { echo -e "\n Error option -sc|--sconv: integer parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          scf_conv="${2}"; shift 2
+                       else
+                          echo -e "\n Invalid argument for option -sc|--sconv: '${2}' not a number\n"; exit 1
+                       fi;;
+
+        -sg|--sgrid )  [ -z ${2} ] && { echo -e "\n Error option -sg|--sgrid: [m]integer parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          scf_grid="${2}"; shift 2
+                       elif grep ^m[1-9] <<< "$2" &> /dev/null; then
+                          scf_grid="${2}"; shift 2
+                       else
+                          echo -e "\n Invalid argument for option -sg|--sgrid: '${2}' not a number or m-grid\n"; exit 1
+                       fi;;
+
+      -pn|--print_n )  [ -z ${2} ] && { echo -e "\n Error option --print_n: integer parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          print_n=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option --print_n: '${2}' not a number\n"; exit 1
+                       fi;;
+
+      -pe|--print_e )  [ -z ${2} ] && { echo -e "\n Error option --print_e: parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          print_e=${2}; E_threshold=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option --print_e: '${2}' not a number\n"; exit 1
+                       fi;;
+
+      -pi|--print_i )  print_i="true"; shift;;
+
+    -pic|--print_ic )  print_ic="true"; shift;;
+
+       -orca|--orca )  use_orca="true"; shift;;
+
+      -nos|--nosort )  sorting="false"; shift;;
+
+   -ref|--reference )  [ -z ${2} ] && { echo -e "\n Error option --reference: integer parameter required\n"; exit 1; }
+                       if ! grep [[:alpha:]] <<< "$2" &> /dev/null; then
+                          reference=${2}; shift 2
+                       else
+                          echo -e "\n Invalid argument for option --reference: '${2}' not a number\n"; exit 1
+                       fi;;
+
+       -eval|--eval )  if   [[ "${2}" == "sparse" ]]; then eval_level="sparse"; shift 2;
+                       elif [[ "${2}" == "normal" ]]; then eval_level="normal"; shift 2;
+                       elif [[ "${2}" == "extra" ]];  then eval_level="extra";  shift 2;
+                       else eval_level="extra"; shift; fi; eval="true";;
+
+ -restart|--restart )  restart="true"; shift;;
+
+ -prop|--properties )  properties="true"; shift;;
+
+                  * )  echo -e "\n Error: unknown argument '${1}'\n"; exit 1;;
+
+   esac
+done
+
+
+
+
+#########################################################################################
+#                                  F U N C T I O N S                                    #
+#########################################################################################
+
+
+#----------------------------------
+# standard input file for Turbomole
+#----------------------------------
+print_input_tbm() {
+cat << "S-INP" > ${source}/standard-input
+
+
+aa XYZ
+ired
+*
+b all def2-SVP
+*
+eht
+
+
+
+dft
+on
+
+ri
+on
+m 900
+
+marij
+
+*
+S-INP
+}
+
+print_input_tbm_charge() {
+cat << "S-INP" > ${source}/standard-input
+
+
+aa XYZ
+ired
+*
+b all def2-SVP
+*
+eht
+
+1
+
+
+dft
+on
+
+ri
+on
+m 900
+
+marij
+
+*
+S-INP
+}
+
+print_input_orca() {
+cat << "S-INP" > ${source}/standard-input
+! PBE def2-TZVP TightOPT TightSCF
+! def2/J RIJCOSX
+! D3
+! HUECKEL SlowConv
+
+%maxcore MEM
+
+%scf
+maxiter 900
+end
+
+%pal
+nprocs NPROCS
+end
+
+* xyzfile 0 1 COORDS
+
+S-INP
+}
+
+
+#-----------------------
+# SLURM job array files
+#-----------------------
+jscript_array_SLURM_tbm() {
+cat << 'S-ARRAY' > ${source}/CREST_OPT_ARRAY 
+#!/bin/bash --login
+#SBATCH -o DEFAULT.%A_%a.out
+#SBATCH -J DEFAULT
+
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --ntasks-per-core=1
+#SBATCH --hint=nomultithread
+#SBATCH --mem-per-cpu=100
+
+#SBATCH --time=24:00:00
+
+#SBATCH -p main
+#SBATCH --qos=standard
+
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=${email}
+
+#SBATCH --array=RANGE
+
+
+#-------------------------
+# Optimization parameters
+#-------------------------
+EXEC="jobex -dscf -c 400 -gcart 4 -energy 7"
+
+#------------------
+# Turbomole module
+#------------------
+module add ${tbm_module}
+
+#------------------
+# General settings
+#------------------
+ulimit -s unlimited
+export SOURCEDIR=`pwd`
+
+#--------------------
+# Turbomole settings
+#--------------------
+mkdir -p /scratch/${USER}/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}/TBM_TMP
+export TURBOTMPDIR=/scratch/${USER}/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}/TBM_TMP
+export PARA_ARCH=SMP
+export TM_PAR_FORK=true
+export PATH=${TURBODIR}/bin/`sysname`:$PATH
+export PARNODES=${SLURM_NTASKS}
+
+#-------------------
+# Function clean_up 
+#-------------------
+clean_up (){
+   cd ${SOURCEDIR}
+   rm -f ${SOURCEDIR}/${SLURM_JOB_NAME}.${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out
+   rm -rf ${TURBOTMPDIR}
+   rm -rf ${TEMPDIR}
+}
+
+#-------------------
+# Start calculation
+#-------------------
+cd conformer-${SLURM_ARRAY_TASK_ID}
+if ! [ -e GEO_OPT_CONVERGED ]; then
+   export JOBDIR=`pwd`
+   actual -r
+   export TEMPDIR=/scratch/${USER}/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}
+#   mkdir ${TEMPDIR}
+   cpc -f -q ${TEMPDIR}
+   cp -f ${JOBDIR}/cosmo_transfer.tmp ${TEMPDIR} 2> /dev/null
+   ln -s ${TEMPDIR} ${JOBDIR}/tempdir
+   { cd ${TEMPDIR}; time $EXEC >> ${JOBDIR}/${SLURM_JOB_NAME}.out 2>> ${JOBDIR}/${SLURM_JOB_NAME}.out; } && \
+   { cd ${JOBDIR}; cp -f ${TEMPDIR}/* ${JOBDIR} &> /dev/null; rm -f ${SLURM_JOB_NAME}.out statistics wherefrom tempdir; clean_up; cd ${SOURCEDIR}; }
+fi
+
+S-ARRAY
+chmod u+x ${source}/CREST_OPT_ARRAY
+}
+
+jscript_array_SLURM_orca() {
+cat << 'S-ARRAY' > ${source}/CREST_OPT_ARRAY
+#!/bin/bash --login
+
+#SBATCH -o DEFAULT.%A_%a.out
+#SBATCH -J DEFAULT
+
+#SBATCH --nodes=1
+#SBATCH --ntasks=16
+#SBATCH --ntasks-per-core=1
+#SBATCH --hint=nomultithread
+#SBATCH --mem-per-cpu=200
+
+#SBATCH --time=3-00:00:00
+#SBATCH -p main
+#SBATCH --qos=standard
+
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=${email}
+
+#SBATCH --array=RANGE
+
+module add ${orca_module}
+
+export SOURCEDIR=`pwd`
+export SCRDIR=/localscratch/${USER}/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}
+
+orca_input_file=INPUT
+
+clean_up() {
+   cd ${JOBDIR}
+   cp -f  ${SCRDIR}/* ${JOBDIR} &> /dev/null
+   rm -rf ${SCRDIR}
+   rm -f  ${JOBDIR}/tempdir
+}
+
+cd conformer-${SLURM_ARRAY_TASK_ID}
+sed -i "s/nprocs.*/nprocs ${SLURM_NTASKS}/" ${orca_input_file}
+sed -i "s/maxcore.*/maxcore ${SLURM_MEM_PER_CPU}/" ${orca_input_file}
+export JOBDIR=`pwd`
+mkdir -p ${SCRDIR}
+cp * ${SCRDIR}
+ln -s ${SCRDIR} ${JOBDIR}/tempdir
+
+trap clean_up EXIT INT TERM
+cd ${SCRDIR}
+orcarun=`which orca`
+${orcarun} ${orca_input_file} >> ${JOBDIR}/${orca_input_file}.out 2>> ${JOBDIR}/${orca_input_file}.out
+
+
+S-ARRAY
+chmod u+x ${source}/CREST_OPT_ARRAY
+}
+
+#---------------------
+# SGE job array files
+#---------------------
+jscript_array_SGE_tbm() {
+cat << 'S-ARRAY' > ${source}/CREST_OPT_ARRAY
+#!/bin/bash --login
+#$ -cwd
+#$ -notify
+#$ -N DEFAULT
+#$ -j y
+# $ -pe ompi* 2-22
+#$ -pe mp 10-22
+#$ -l h_rt=220:00:00
+#$ -l mem_free=4G
+#$ -m eas
+#$ -M ${email}
+#$ -t 1-RME
+
+#-------------------------------------
+# Output file (NAME) and To-Do (EXEC)
+#-------------------------------------
+NAME=$JOB_NAME
+EXEC="jobex -dscf -c 400 -gcart 4 -energy 7"
+
+#------------------
+# Turbomole module
+#------------------
+module load ${tbm_module}
+
+#---------------------------------------------------------
+# File system for temporary data and parsing of arguments
+#---------------------------------------------------------
+IOSYS="/fast/${USER}"
+
+#------------------
+# General settings
+#------------------
+ulimit -s unlimited
+export SOURCEDIR=`pwd`
+export SCRDIR=${IOSYS}/${JOB_ID}.${SGE_TASK_ID}.${JOB_NAME}
+[ -e ${TMPDIR}/machines ] && SLAVES=$(paste -s ${TMPDIR}/machines)
+
+#--------------------
+# Turbomole settings
+#--------------------
+export MPI_REMSH=${SGE_ROOT}/scripts/batchssh
+export TURBOTMPDIR=${SCRDIR}/TBM_TMP
+if echo ${PE} | grep -q "ompi"
+then
+   export PARA_ARCH=MPI
+else
+   export PARA_ARCH=SMP
+fi
+export PARNODES=${NSLOTS}
+export HOSTS_FILE=${TMPDIR}/machines
+export PATH=${TURBODIR}/bin/`sysname`:$PATH
+
+#---------------------------------------
+# Function clean_up and signal-catching
+#---------------------------------------
+clean_up (){
+   cd ${JOBDIR}
+   cp -f ${SCRDIR}/* ${JOBDIR} > /dev/null 2>&1
+   if [ -e "${TMPDIR}/machines2" ]
+   then
+      REMOTE=$(awk 'BEGIN {FS = ","} ; {print $1}' ${TMPDIR}/machines2)
+   else
+      REMOTE=${HOSTNAME}
+   fi
+   for MACHINE in ${REMOTE}
+   do
+      ssh ${LOGNAME}@${MACHINE} "rm -rf /scratch/${JOB_ID}.*"
+   done
+   rm -f ${JOBDIR}/tempdir; rm -rf ${SCRDIR}
+   echo -e "---- `date +'%d-%m-%Y - %H:%M:%S'`  Temporary data cleared\n\n"
+}
+signaling() {
+   # double safety check (directory .block and variable CLN)
+   # to avoid multiple executions of function clean_up
+   if mkdir ${SCRDIR}/.block &> /dev/null
+   then
+      if [[ "${CLN}" == "false" ]]; then export CLN="true"; clean_up; fi
+   fi
+}
+
+#---------------------------
+# Copy data and create link
+#---------------------------
+actual -r
+cd conformer-${SGE_TASK_ID}
+if ! [ -e GEO_OPT_CONVERGED ]; then
+   export JOBDIR=`pwd`
+   mkdir ${SCRDIR}
+   cpc -f -q ${SCRDIR}
+   # for COSMO/DCOSMO-RS
+   cp -f ${JOBDIR}/cosmo_transfer.tmp ${SCRDIR} 2> /dev/null
+   # for Woelfling
+   cp -f ${JOBDIR}/coords ${SCRDIR} 2> /dev/null
+   # for NumGrad/NumHess
+   if `grep "mfile" ${JOBDIR}/control &> /dev/null`; then
+      cp -f ${TMPDIR}/machines ${SCRDIR} 2> /dev/null || \
+      printf "${HOSTNAME}\n%.0s" `eval echo "{1..$NSLOTS}"` >> ${SCRDIR}/machines 2> /dev/null
+   fi
+   ln -s ${SCRDIR} ${JOBDIR}/tempdir
+fi
+
+#-------------------
+# Start calculation
+#-------------------
+export CLN="false"; trap signaling EXIT
+
+# Print some information
+echo -e "Job name    :  ${NAME}"
+if [ -n "${ARGS}" ]; then
+echo -e "Task        :  ${ARGS[@]}"
+else
+echo -e "Task        :  ${EXEC}"
+fi
+echo -e "N(cores)    :  ${NSLOTS}"
+echo -e "Master      :  ${HOSTNAME}"
+echo -e "Slave(s)    :  ${SLAVES}"
+echo -e "Home-dir.   :  ${JOBDIR}"
+echo -e "Temp-dir.   :  ${SCRDIR}"
+echo -e "\n"
+
+if ! [ -e GEO_OPT_CONVERGED ]; then
+   cd ${SCRDIR}
+   echo -e "---- `date +'%d-%m-%Y - %H:%M:%S'`  Starting: ${EXEC}"
+   time ${EXEC} >> ${JOBDIR}/${NAME}.out 2>> ${JOBDIR}/${NAME}.out && sleep 1
+   { echo -e "\n---- `date +'%d-%m-%Y - %H:%M:%S'`  '${NAME}' on ${HOSTNAME} finished\n\n"; }
+fi
+
+S-ARRAY
+chmod u+x ${source}/CREST_OPT_ARRAY
+}
+
+
+#-------------------------------------------
+# Evaluation of the structure optimizations
+#-------------------------------------------
+get_E_opt_orca() {
+cat << 'E-OPT' > ${source}/.crest_e_opt
+#!/bin/bash
+
+source=`pwd`
+Ha_kJ_conv="2625.5001664"
+COSMO="false"
+DCOSMO_RS="false"
+
+if ! [ -z ${2} ]
+then
+   ref="${2}"
+else
+   ref=1
+fi
+
+typeset -A list_E_tot
+[[ "${1}" != "sparse" ]] && rm -f ${source}/crest_conformers_opt.xyz
+typeset -i i=0
+for dir in `ls -d conformer-*/ | sort -V`
+do
+   cd ${source}/${dir}
+   if [ -d properties ]
+   then
+      cd properties
+   fi
+   dir=${dir#*-}; dir=${dir::-1}
+
+   if ! grep -a "ORCA TERMINATED NORMALLY" * &> /dev/null
+   then
+      if [ ${dir} -eq ${ref} ]
+      then
+         exit 1 # no relative energies without a reference compound
+      else
+         list_E_tot["$dir"]="n/a"
+         continue
+      fi
+   fi
+
+   if grep -a "Final Gibbs free energy" * &> /dev/null
+   then
+      ENERGY=`grep -a "Final Gibbs free energy" * | tail -n 1 | awk '{print $6}'`
+      output=E_gibbs
+   else
+      ENERGY=`grep -a "FINAL SINGLE POINT ENERGY" * | tail -n 1 | awk '{print $5}'`
+      output=E_opt
+   fi
+   list_E_tot["$dir"]=${ENERGY}
+
+   # Add final structure to collective coordinates file
+   if [ ! -d ${source}/conformer-${dir}/properties ]; then
+      coords_file=$( grep "Coordinates from ORCA-job" * | tail -n 1 | awk '{print $4}' ).xyz
+      n_atoms=`sed -n '1p' ${coords_file}`
+      actual_coords=$( sed -e '/Coord.*/d' -e '1d' ${coords_file} )
+      echo -e "  ${n_atoms}\n       ${ENERGY}\n${actual_coords}" >> ${source}/crest_conformers_opt.xyz
+   fi
+
+   i+=1
+done
+
+# For subsequent sorting of the results
+typeset -A raw_list_assoc
+typeset -A raw_list_E_rel_assoc
+
+# Print out unsorted results
+echo -e " conf.       E_tot        E_rel\n-----------------------------------" > ${source}/${output}
+conformer_idx_list=( $( for k in ${!list_E_tot[*]}; do echo $k; done | sort -h ) )
+E_ref=${list_E_tot[${ref}]}
+for conformer in ${conformer_idx_list[*]}
+do
+   let dir="${conformer}"
+   ENERGY=${list_E_tot[$conformer]}
+   if [[ "${conformer}" == "${ref}" ]]
+   then
+      E_rel="0.0"
+      printf "%5s%16.6f%10.4f\n" ${dir} ${ENERGY} ${E_rel} >> ${source}/${output}
+   elif [[ "${ENERGY}" == "n/a" ]]; then
+      printf "%5s%16s%10s\n" ${dir} "n/a" "" >> ${source}/${output}
+      continue
+   elif [[ "${ENERGY}" == "opt.error" ]]; then
+      printf "%5s%16s%10s\n" ${dir} "opt. error" "" >> ${source}/${output}
+      continue
+   else
+      E_rel=`echo "((((${ENERGY})/1.0000)-((${E_ref})/1.0000))*((${Ha_kJ_conv})/1.0000))" | bc -l`
+      printf "%5s%16.6f%10.4f\n" ${dir} ${ENERGY} ${E_rel} >> ${source}/${output}
+   fi
+   raw_list_sort=( ${raw_list_sort[*]} ${ENERGY} )
+   raw_list_sort_assoc["${conformer}"]=${ENERGY}
+   raw_list_E_rel_assoc[$ENERGY]="${E_rel}"
+done
+
+E-OPT
+if [[ "${sorting}" == "true" ]]; then
+cat << 'E-OPT' >> ${source}/.crest_e_opt
+
+IFS_BACKUP="$IFS"
+IFS=$'\n'
+sorted=( $( sort -r <<< "${raw_list_sort[*]}" ) )
+IFS=$IFS_BACKUP
+unset raw_list_sort
+raw_list_sort=( "${sorted[*]}" )
+
+
+# Append sorted values to file
+sed -i "1 s/$/    |   conf.       E_tot        E_rel/" ${source}/${output}
+sed -i "2 s/$/|-------------------------------------/" ${source}/${output}
+typeset -i line=3
+for conf_e_tot in ${raw_list_sort[*]}
+do
+   for conformer_idx in ${!raw_list_sort_assoc[*]}
+   do
+      if [[ "${conf_e_tot}" == "${raw_list_sort_assoc[$conformer_idx]}" ]]
+      then
+         conformer_E_tot="${raw_list_sort_assoc[$conformer_idx]}"
+         break
+      fi
+   done
+   for en_rel in ${!raw_list_E_rel_assoc[*]}
+   do
+      if [[ "${conf_e_tot}" == "${en_rel}" ]]
+      then
+         E_rel="${raw_list_E_rel_assoc[$en_rel]}"
+         break
+      fi
+   done
+   sappend=$( printf "   |%7s%16.6f%10.4f" ${conformer_idx} ${conformer_E_tot} ${E_rel} )
+   sed -i "${line} s/$/ ${sappend}/" ${source}/${output}
+   line+=1
+done
+E-OPT
+fi
+chmod u+x ${source}/.crest_e_opt
+}
+
+
+get_E_opt_tbm() {
+cat << 'E-OPT' > ${source}/.crest_e_opt
+#!/bin/bash
+
+source=`pwd`
+Ha_kJ_conv="2625.5001664"
+COSMO="false"
+DCOSMO_RS="false"
+
+if ! [ -z ${2} ]
+then
+   ref="${2}"
+else
+   ref=1
+fi
+
+typeset -A list_E_tot
+[[ "${1}" != "sparse" ]] && rm -f ${source}/crest_conformers_opt.xyz
+typeset -i i=0
+for dir in `ls -d conformer-*/ | sort -V`
+do
+   cd ${source}/${dir}
+   dir=${dir#*-}; dir=${dir::-1}
+
+   if ! [ -s job.last ]
+   then
+      if [ ${dir} -eq ${ref} ]
+      then
+         exit 1 # no relative energies without a reference compound
+      else
+         list_E_tot["$dir"]="n/a"
+         continue
+      fi
+   fi
+
+   if ! cat job.last |  grep -a "CONVERGENCY CRITERIA FULFILLED" &> /dev/null
+   then
+      if [ ${dir} -eq ${ref} ]
+      then
+         echo -e "\n Reference structure calculation quit with an error. Verify data!\n"
+         exit 1
+      else
+         list_E_tot["$dir"]="opt.error"
+         continue
+      fi
+   fi
+   if cat job.last | grep -a "COSMO RESULTS" > /dev/null 2>&1
+   then
+      COSMO="true"
+   elif cat job.last | grep -a "DCOSMO-RS RESULTS" > /dev/null 2>&1
+   then
+      DCOSMO_RS="true"
+   fi
+
+   if [[ "${COSMO}" == "true" ]]
+   then
+      ENERGY=`cat job.last | grep -a " Total energy + OC corr." | awk '{print $7}'`
+   elif [[ "${DCOSMO_RS}" == "true" ]]
+   then
+      SCF_ENERGY=`cat job.last | grep "Total energy" | awk '{print $4'}`
+      DCOSMORS_ENERGY=`cat job.last | grep "Outlying charge corr. (DCOSMO-RS)=" | awk '{print $5}'`
+      ENERGY=`echo "scale = 10 ; (((${SCF_ENERGY})/1)+((${DCOSMORS_ENERGY})/1))" | bc`
+   else
+      ENERGY=`cat job.last | grep -a "total energy" | tail -n 1 | awk '{print $5}'`
+   fi
+   list_E_tot["$dir"]=${ENERGY}
+
+   if [[ "${1}" != "sparse" ]] && [[ "${1}" != "normal" ]]
+   then
+      # Create molden.input file
+      rm -f molden.input &> /dev/null
+      echo -e "\nn\n\n\n" | tm2molden &> /dev/null
+   fi
+
+   if [[ "${1}" != "sparse" ]]
+   then
+      # Add final structure to collective coordinates file
+      tmp=$(sed -n '/CARTESIAN COORDINATES/,/CARTESIAN GRADIENTS/p' job.last | wc -l)
+      n_atoms=`echo "scale = 0; ((${tmp}/1)-3)" | bc -l`
+      actual_coords=$( cat job.last | grep "atomic coordinates" -A ${n_atoms} | tail -n ${n_atoms} | \
+		       awk '{bohr=.52917706} {printf "%2s%20.14f%20.14f%20.14f\n", $4, $1*bohr, $2*bohr, $3*bohr}' )
+      echo -e "  ${n_atoms}\n       ${ENERGY}\n${actual_coords}" >> ${source}/crest_conformers_opt.xyz
+   fi
+
+   i+=1
+done
+
+
+# For subsequent sorting of the results
+typeset -A raw_list_assoc
+typeset -A raw_list_E_rel_assoc
+
+# Print out unsorted results
+echo -e " conf.       E_tot       E_rel\n---------------------------------" > ${source}/E_opt
+conformer_idx_list=( $( for k in ${!list_E_tot[*]}; do echo $k; done | sort -h ) )
+E_ref=${list_E_tot[${ref}]}
+for conformer in ${conformer_idx_list[*]}
+do
+   let dir="${conformer}"
+   ENERGY=${list_E_tot[$conformer]}
+   if [[ "${conformer}" == "${ref}" ]]
+   then
+      E_rel="0.0"
+      printf "%5s%16.6f%8.1f\n" ${dir} ${ENERGY} ${E_rel} >> ${source}/E_opt
+   elif [[ "${ENERGY}" == "n/a" ]]; then
+      printf "%5s%16s%8s\n" ${dir} "n/a" "" >> ${source}/E_opt
+      continue
+   elif [[ "${ENERGY}" == "opt.error" ]]; then
+      printf "%5s%16s%8s\n" ${dir} "opt. error" "" >> ${source}/E_opt
+      continue
+   else
+      E_rel=`echo "((((${ENERGY})/1.0)-((${E_ref})/1.0))*((${Ha_kJ_conv})/1.0))" | bc -l`
+      printf "%5s%16.6f%8.1f\n" ${dir} ${ENERGY} ${E_rel} >> ${source}/E_opt
+   fi
+   raw_list_sort=( ${raw_list_sort[*]} ${ENERGY} )
+   raw_list_sort_assoc["${conformer}"]=${ENERGY}
+   raw_list_E_rel_assoc[$ENERGY]="${E_rel}"
+done
+E-OPT
+if [[ "${sorting}" == "true" ]]; then
+cat << 'E-OPT' >> ${source}/.crest_e_opt
+
+
+# Bubble-Sort algorithm
+for (( a=1; a<${#raw_list_sort[*]}; a++ ))
+do
+   typeset -i b=(${#raw_list_sort[*]}-${a})
+   for (( i=1; i<=${b}; i++ ))
+   do
+      typeset -i index=${i}-1
+      if (( $(echo "${raw_list_sort[$index]} > ${raw_list_sort[$i]}" | bc -l) ))
+      then
+         tmp_larger="${raw_list_sort[$index]}"
+         tmp_lower="${raw_list_sort[$i]}"
+         raw_list_sort[$index]="${tmp_lower}"
+         raw_list_sort[$i]="${tmp_larger}"
+      fi
+   done
+done
+
+
+# Append sorted values to file
+sed -i "1 s/$/   |   conf.       E_tot       E_rel/" ${source}/E_opt
+sed -i "2 s/$/|-----------------------------------/" ${source}/E_opt
+typeset -i line=3
+for conf_e_tot in ${raw_list_sort[*]}
+do
+   for conformer_idx in ${!raw_list_sort_assoc[*]}
+   do
+      if [[ "${conf_e_tot}" == "${raw_list_sort_assoc[$conformer_idx]}" ]]
+      then
+         conformer_E_tot="${raw_list_sort_assoc[$conformer_idx]}"
+         break
+      fi
+   done
+   for en_rel in ${!raw_list_E_rel_assoc[*]}
+   do
+      if [[ "${conf_e_tot}" == "${en_rel}" ]]
+      then
+         E_rel="${raw_list_E_rel_assoc[$en_rel]}"
+         break
+      fi
+   done
+   sappend=$( printf "   |%7s%16.6f%8.1f" ${conformer_idx} ${conformer_E_tot} ${E_rel} )
+   sed -i "${line} s/$/ ${sappend}/" ${source}/E_opt
+   line+=1
+done
+E-OPT
+fi
+chmod u+x ${source}/.crest_e_opt
+}   
+
+
+
+
+#######################################################################################################
+#                                             M A I N                                                 #
+#######################################################################################################
+
+
+
+#--------------------
+# Set prompt options
+#--------------------
+
+TXTGREEN='\e[0;32m'
+TXTRED='\e[0;31m'
+TXTRST='\e[0m'
+
+
+
+#-------------------------------------------------------------------
+# Print out a standard input file for TURBOMOLE (-> define) or ORCA
+#-------------------------------------------------------------------
+if [[ "${print_i}" == "true" ]]
+then
+   if [[ "${use_orca}" == "true" ]]
+   then
+      print_input_orca; mv standard-input orca_input
+   else
+      print_input_tbm;  mv standard-input input
+   fi
+   exit 0
+fi
+if [[ "${print_ic}" == "true" ]]
+then
+   print_input_tbm_charge; mv standard-input input
+   exit 0
+fi
+
+
+
+#-----------------------------------------------------------------------
+# Evaluation of the structure optimizations -> energy (and coordinates)
+#-----------------------------------------------------------------------
+if [[ "${eval}" == "true" ]]
+then
+   if [[ "${use_orca}" == "true" ]]; then
+      get_E_opt_orca
+   else
+      get_E_opt_tbm
+   fi
+   [[ "${eval_level}" == "sparse" ]] && ${source}/.crest_e_opt sparse ${reference}
+   [[ "${eval_level}" == "normal" ]] && ${source}/.crest_e_opt normal ${reference}
+   [[ "${eval_level}" == "extra"  ]] && ${source}/.crest_e_opt extra  ${reference}
+   rm -f ${source}/.crest_e_opt
+   exit 0
+fi
+
+
+
+#---------------------------------------
+# Prepare restart for Orca calculations
+#---------------------------------------
+if [[ "${restart}" == "true" ]] && [[ "${use_orca}" == "true" ]]; then
+if ! [[ "${def_inp}" == "true" ]]; then echo -e "\n Error: Name of input file not provided\n"; exit 1; fi
+if ! [ -e ${define_input} ]; then echo -e "\n Error: No file named "${define_input}" found\n"; exit 1; fi
+for dir in $( ls -d conformer-* )
+do
+   cd ${dir}
+   if ! [ -e ${define_input} ]
+   then
+      cd ..
+      continue
+   fi
+   if ! grep "ORCA TERMINATED NORMALLY" ${define_input}.out &> /dev/null
+   then
+      if [ -L tempdir ] || [ -e tempdir ]
+      then
+         # calculaitons is apparently still running
+         cd ..
+         continue
+      else
+         error=${dir##*-}
+         error_array=( ${error_array[*]} ${error} )
+         mkdir tmpdata
+         coords=$( ls | grep ^[0-9]*.xyz )
+         cp ${define_input} ${coords} tmpdata
+         rm -f * &> /dev/null
+         cp tmpdata/* .
+         rm -rf tmpdata
+      fi
+   fi
+   cd ..
+done
+
+if [[ "${#error_array[*]}" == 0 ]]
+then
+   echo -e "\n No errors found\n"
+   exit 0
+fi
+
+IFS=$'\n'; error_array_sorted=( $(sort -g <<<"${error_array[*]}") ); unset IFS
+TXTGREEN='\e[0;32m'
+TXTRED='\e[0;31m'
+TXTRST='\e[0m'
+typeset -i i=1
+echo -e "\n  Error in\c"
+for item in ${!error_array_sorted[*]}
+do
+   if [ `expr $i % 8` -eq 0 ]; then
+      printf "${TXTRED}%6s${TXTRST}\n" "${error_array_sorted[$item]}"
+      echo -e "          \c"
+   else
+      printf "${TXTRED}%6s${TXTRST}" "${error_array_sorted[$item]}"
+   fi
+   i+=1
+done
+i=i-1
+if [ `expr $i % 5` -eq 0 ]; then
+   echo ""
+else
+   echo -e "\n"
+fi
+
+array_range=$( echo ${error_array_sorted[*]} | sed  's/ /,/g' )
+sed -i "s/#SBATCH --array=.*/#SBATCH --array=${array_range}/" CREST_OPT_ARRAY
+echo -e "\n  - Setup of calculation(s) has been re-done\n  - File CREST_OPT_ARRAY has been updated\n"
+exit 0
+fi
+
+
+
+#----------------------------------------------------
+# Choose file and read initial structure information
+#----------------------------------------------------
+if [ -z ${file} ]
+then
+   if [ -s ${source}/crest_conformers.xyz ]; then
+      file="crest_conformers.xyz"
+   elif [ -s ${source}/xtb.trj ]; then
+      file="xtb.trj"
+   elif [ -s ${source}/full_ensemble.xyz ]; then
+      file="full_ensemble.xyz"
+   else
+      echo -e "\n No file containing crest/xtb conformers found\n"; exit 1
+   fi
+fi
+tmp=`head -n 1 ${file}`; tmp="${tmp#"${tmp%%[![:space:]]*}"}"
+nr_atoms=${tmp}
+total_nr_struc=$(grep -c "^ *-" ${file})
+block_size=$((${nr_atoms}+2))
+energy_position=$((${block_size}-1)) 
+let max_file_lines=( ${block_size} * ${total_nr_struc} )
+
+
+
+#------------------------
+# Set up conformer array
+#------------------------
+if [ -z ${conf_array} ]; then
+   [ -z ${start_point} ] && start_point=1
+   if   [ ! -z ${print_n} ]; then
+      nr_struc="${print_n}"
+   elif [ ! -z ${print_e} ]; then
+      nr_struc="${total_nr_struc}"
+   elif [ ! -z ${force_nr_struc} ]; then
+      nr_struc="${force_nr_struc}"
+   else
+      nr_struc=${nr_struc:-100}
+   fi
+   end_seq=$((start_point+nr_struc-1))
+   conf_array=( $( seq ${start_point} ${end_seq} ) )
+else
+   start_point=${conf_array[0]}
+   nr_struc=${#conf_array[*]}
+fi
+#echo "++ ${conf_array[*]} ++"
+last_index_conf_array=$((${#conf_array[@]}-1))
+
+
+
+#------------------------------------------------------------------------
+# Print CREST conformer information to screen (no setup of calculations)
+#------------------------------------------------------------------------
+Ha_kJ_conv="2625.5001664"
+E_threshold=${E_threshold:-10.0}
+if [ ! -z ${print_n} ] || [ ! -z ${print_e} ]
+then
+
+   for conf in ${conf_array[*]}
+   do
+
+      let seek_block=( ${block_size} * ${conf} )
+      energy=$( head -n ${seek_block} ${file} | tail -n ${energy_position} | head -n 1 )
+      coordinates=$( head -n ${seek_block} ${file} | tail -n ${nr_atoms} )
+      if [ "${seek_block}" -gt "${max_file_lines}" ]; then echo; exit 0; fi # EOF reached -> quit
+
+      if [[ "${conf}" == "${conf_array[0]}" ]]
+      then
+         E_ref=${energy}
+         E_rel="0.00"
+         echo -e "\n conf.       E_tot       E_rel\n---------------------------------"
+         printf "%5s%16.6f%9.2f\n" ${conf} ${E_ref} ${E_rel}
+      else
+         E=${energy}
+         tmp=`echo "((((${E})/1.00)-((${E_ref})/1.00))*((${Ha_kJ_conv})/1.00))" | bc -l`
+         E_rel=` printf "%0.2f\n" ${tmp}`
+         if [[ -n ${print_e} ]]; then
+            if (( $(echo "${E_rel} > ${E_threshold}" | bc -l) )); then echo; exit 0; fi
+         fi
+         printf "%5s%16.6f%9.2f\n" ${conf} ${E} ${E_rel}
+      fi
+
+
+done
+echo; exit 0
+fi
+
+
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Main program: Use CREST/XTB coordinates to set up TURBOMOLE/ORCA calculations
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+#--- General settings ---
+Ha_kJ_conv="2625.5001664"
+E_threshold=${E_threshold:-10.0}
+define_input=${define_input:=standard-input}
+[[ ${define_input} == "standard-input" ]] && if [[ "${use_orca}" == "true" ]]; then print_input_orca; else print_input_tbm; fi
+[[ "${use_orca}" == "true" ]] && file_extension=".xyz" || file_extension="-xyz"
+level=${level:-1}
+
+#--- TURBOMOLE settings ---
+scf_conv=${scf_conv:=8}
+scf_grid=${scf_grid:=m5}
+if [ ${level} -ge 1 ]; then if [ -z ${TURBODIR} ]; then echo -e "\n Error: Turbomole not found\n"; exit 1; fi; fi
+
+
+
+#-------------------------------------------------------------------------------------
+# 1) Normal run, i.e., no subsequent (properties) calculations and no restart request
+#-------------------------------------------------------------------------------------
+
+if [[ "${properties}" == "false" ]] && [[ "${restart}" == "false" ]]; then
+
+#--- Print information ---
+if [[ "${no_info}" == "false" && "${print_n}" == "" && "${print_e}" == "" ]]
+then
+   if [[ "${force_n}" == "true" ]]; then
+      echo -e "\n Max. structures  : ${TXTGREEN}${nr_struc}${TXTRST}\n E_rel threshold  : ${TXTGREEN}${E_threshold} kJ/mol${TXTRST} ${TXTRED}(ignored)${TXTRST}"
+      echo -e " Prog. input file : ${TXTGREEN}${define_input}${TXTRST}\n"
+   elif [[ "${force_e}" == "true" ]]; then
+      echo -e "\n Max. structures  : ${TXTGREEN}${nr_struc}${TXTRST} ${TXTRED}(ignored)${TXTRST}\n E_rel threshold  : ${TXTGREEN}${E_threshold} kJ/mol${TXTRST}"
+      echo -e " Prog. input file : ${TXTGREEN}$${define_input}${TXTRST}\n"
+   else
+      echo -e "\n Max. structures  : ${TXTGREEN}${nr_struc}${TXTRST}\n E_rel threshold  : ${TXTGREEN}${E_threshold} kJ/mol${TXTRST}"
+      echo -e " Prog. input file : ${TXTGREEN}${define_input}${TXTRST}\n"
+   fi
+fi
+
+#--- Start preparation of directories and calculations ---
+typeset -a spin=( "${TXTGREEN}-${TXTRST}" "${TXTGREEN}\\\\${TXTRST}" "${TXTGREEN}|${TXTRST}" "${TXTGREEN}/${TXTRST}" )
+typeset -i s=0
+typeset -i i=1
+typeset -i structure_count=0
+skip="true"
+if [ ${start_point} -ne 1 ]
+then
+   E_crest_output="E_crest_${start_point}"
+else
+   E_crest_output="E_crest"
+fi
+
+
+for conf in ${conf_array[*]}
+do
+
+   if [[ "${no_info}" == "false" ]]; then echo -en " Processing conformers [${spin[$s]}] \r"; s+=1; if [ $s -eq 4 ]; then s=0; fi; fi
+
+   let seek_block=( ${block_size} * ${conf} )
+   energy=$( head -n ${seek_block} ${file} | tail -n ${energy_position} | head -n 1 )
+   coordinates=$( head -n ${seek_block} ${file} | tail -n ${nr_atoms} )
+   if [ "${seek_block}" -gt "${max_file_lines}" ]; then break; fi # EOF reached -> break
+
+   if [[ "${conf}" == "${conf_array[0]}" ]]
+   then
+         E_ref=${energy}
+         E_rel="0.00"
+         echo -e " conf.       E_tot       E_rel\n---------------------------------" > ${source}/${E_crest_output}
+         printf "%5s%16.6f%9.2f\n" ${conf} ${E_ref} ${E_rel} >> ${source}/${E_crest_output}
+         echo -e "  ${nr_atoms}\n"  > ${conf}${file_extension}
+         echo -e "${coordinates}"  >> ${conf}${file_extension}
+   else
+         E=${energy}
+         tmp=`echo "((((${E})/1.00)-((${E_ref})/1.00))*((${Ha_kJ_conv})/1.00))" | bc -l`
+         E_rel=` printf "%0.2f\n" ${tmp}`
+         if [[ "${force_n}" == "false" ]]; then
+            if (( $(echo "${E_rel} > ${E_threshold}" | bc -l) )); then break; fi
+         fi
+         printf "%5s%16.6f%9.2f\n" ${conf} ${E} ${E_rel} >> ${source}/${E_crest_output}
+         echo -e "  ${nr_atoms}\n"  > ${conf}${file_extension}
+         echo -e "${coordinates}"  >> ${conf}${file_extension}
+   fi
+
+   if [ ${level} -gt 0 ]
+   then
+      mkdir ${source}/conformer-${conf}
+      cp ${conf}${file_extension} ${define_input} ${source}/conformer-${conf}
+      cd conformer-${conf}
+
+      if [[ "${no_info}" == "false" ]]; then echo -en " Processing conformers [${spin[$s]}] \r"; s+=1; if [ $s -eq 4 ]; then s=0; fi; fi
+
+      if [[ "${use_orca}" == "true" ]]; then
+         cp ${source}/${define_input} ${source}/conformer-${conf}
+         charge=$( grep xyzfile ${define_input} | awk '{print $3}' )
+         multi=$(  grep xyzfile ${define_input} | awk '{print $4}' )
+         sed -i "s/.*xyzfile.*/\* xyzfile ${charge} ${multi} ${conf}${file_extension}/" ${define_input}
+
+      else
+         cp -f ${conf}${file_extension} backup.xyz
+         sed -i -e '1,2d' -e '3 i $coord' -e '$ a $end' ${conf}${file_extension}
+         sed -i "s/XYZ/${conf}${file_extension}/" ${define_input}
+         define < ${define_input} &> /dev/null
+         if [ -e tmp.input ]
+         then
+            rm -f control tmp.input
+            sed -i '0,/ired/{/ired/d;}' ${define_input}
+            sed -i '0,/*/{/*/d;}'       ${define_input}
+            sed -i '/aa/a no'           ${define_input}
+            sed -i '/aa/a *'            ${define_input}
+            define < ${define_input} &> /dev/null
+         fi
+
+         if [[ "${no_info}" == "false" ]]; then echo -en " Processing conformers [${spin[$s]}] \r"; s+=1; if [ $s -eq 4 ]; then s=0; fi; fi
+
+         sed -i '/scfiterlimit/ s/30/900/'                                 control
+         sed -i 's/closedshell=.05/automatic=0.1/g'                        control
+         sed -i "s/gridsize *[0-9a-zA-Z_ ]*/gridsize   ${scf_grid}/"       control
+         sed -i "s/\$scfconv *[0-9a-zA-Z_ ]*/\$scfconv   ${scf_conv}/"     control
+         sed -i "s/\$maxcor *[0-9a-zA-Z_ ]*/\$maxcor    ${maxcore} MiB  per_core/" control
+         [ -n "$SGE_ROOT" ] && sed -i 's/$maxcor *[0-9a-zA-Z_ ]*/$maxcor    200 MiB  per_core/' control
+         sed -i "s/\$ricore *[0-9a-zA-Z_ ]*/\$ricore      ${maxri}/"             control
+         [ -n "$SGE_ROOT" ] && sed -i 's/$ricore *[0-9a-zA-Z_ ]*/$ricore      200/'             control
+         if [ -z ${no_disp} ]; then sed -i "$ i\$disp3 -bj" control; fi
+         if [ ! -z ${epsilon} ]; then sed -i "2 i \$cosmo\n   epsilon=${epsilon}" control; fi
+      fi
+
+      cd ${source}
+
+   fi
+
+   tmp_conf_array=( ${tmp_conf_array[*]} ${conf} )
+
+done
+if [[ "${no_info}" == "false" ]]; then echo -e " Processing conformers [${TXTGREEN}done${TXTRST}]\n"; fi
+
+
+
+#---------------------------------------------------------------------------------------
+# 2) Perform a second round of subsequent (properties) calculations on existing results
+#---------------------------------------------------------------------------------------
+
+elif [[ "${properties}" == "true" ]]; then
+
+if [[ "${no_info}" == "false" && "${print_n}" == "" && "${print_e}" == "" ]]
+then
+   echo -e "\n Processing conformers\n"
+fi
+
+for conf in ${conf_array[*]}
+do
+
+   if ! [ -d "${source}/conformer-${conf}" ]; then
+      printf "   Warning: Conformer %4s requested, but directory %-16s is missing -- skipping\n" ${conf} \'conformer-${conf}\'
+      continue
+   fi
+
+   cd ${source}/conformer-${conf}
+   if [ -d ${source}/conformer-${conf}/properties ]; then
+      printf "   Warning: Conformer %4s requested, but directory 'properties' is already exisiting -- skipping\n" ${conf}
+      continue
+   fi
+   mkdir ${source}/conformer-${conf}/properties
+   if [[ "${use_orca}" == "true" ]]; then 
+      opt_coord_source_file=$( grep -s NAME * | awk '{print $3}' )
+      opt_coord_source_file=${opt_coord_source_file%%.*}
+      cp ${opt_coord_source_file}.xyz ${source}/conformer-${conf}/properties
+      cp ${source}/${define_input} ${source}/conformer-${conf}/properties
+      cd ${source}/conformer-${conf}/properties
+      mv ${opt_coord_source_file}.xyz opt_structure.xyz
+      charge=$( grep xyzfile ${define_input} | awk '{print $3}' )
+      multi=$(  grep xyzfile ${define_input} | awk '{print $4}' )
+      sed -i "s/.*xyzfile.*/\* xyzfile ${charge} ${multi} opt_structure.xyz/" ${define_input}
+   fi
+   cd ${source}
+
+   tmp_conf_array=( ${tmp_conf_array[*]} ${conf} )
+
+   printf "   Conformer %4s done\n" ${conf}
+
+done; echo
+
+fi
+
+
+#--- Set up range for SGE/SLURM array job; important if conformer numbers are not continuous ---
+if [ -z ${tmp_conf_array} ]; then echo -e "\n No conformers to process -- exiting\n"; exit 0; fi
+typeset -i counter=0
+last_idx=$((${#tmp_conf_array[@]}-1))
+for conf_num in ${tmp_conf_array[*]}
+do
+   if [[ "${conf_num}" == "${tmp_conf_array[0]}" ]]; then
+      start="${conf_num}"
+      previous=${conf_num}
+      counter+=1
+      continue
+   fi
+   minus=$((${conf_num} - 1))
+   if [ "${minus}" -eq "${previous}" ]; then
+      previous=${conf_num}
+      counter+=1
+   else
+      if [ ${counter} -gt 1 ]
+      then
+         array_job_idx=( "${array_job_idx[*]}" "${start}-${previous}" )
+         start=${conf_num}
+         previous=${conf_num}
+         counter=1
+      else
+         array_job_idx=( "${array_job_idx[*]}" "${start}" )
+         start=${conf_num}
+         previous=${conf_num}
+         counter=1
+      fi
+   fi
+   if [[ "${conf_num}" == "${tmp_conf_array[$last_idx]}" ]]
+   then
+      if [ ${counter} -gt 1 ]
+      then
+         array_job_idx=( "${array_job_idx[*]}" "${start}-${conf_num}" )
+      else
+         array_job_idx=( "${array_job_idx[*]}" "${conf_num}" )
+      fi
+
+   fi
+done
+array_range=$( echo ${array_job_idx[*]} | sed  's/ /,/g' )
+
+
+if [ ${level} -ge 1 ]
+then
+   cd ${source}
+   if [[ "${use_orca}" == "true" ]]; then
+      if [ -z "$SGE_ROOT" ]; then
+         jscript_array_SLURM_orca
+         if [[ "${properties}" == "true" ]]; then sed -i 's/cd conformer-${SLURM_ARRAY_TASK_ID}/cd conformer-${SLURM_ARRAY_TASK_ID}\/properties/' CREST_OPT_ARRAY; fi
+         sed -i "s/INPUT.*/${define_input}/" CREST_OPT_ARRAY
+      else
+         jscript_array_SGE_orca
+      fi
+   else
+      if [ -z "$SGE_ROOT" ]; then
+         jscript_array_SLURM_tbm
+      else
+         jscript_array_SGE_tbm
+      fi
+   fi
+   sed -i "s/RANGE/${array_range}/" ${source}/CREST_OPT_ARRAY
+fi
+
+
+if [ ${level} -eq 2 ]
+then
+   cd ${source}
+   if [ -z "$SGE_ROOT" ]; then submit="sbatch"; else submit="qsub"; fi
+   read sbatch_output < <(${submit} ${source}/CREST_OPT_ARRAY)
+   if [[ "${no_info}" == "false" ]]; then echo -e " ${sbatch_output}\n"
+   fi         
+fi
+
+
