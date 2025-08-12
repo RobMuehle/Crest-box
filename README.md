@@ -11,7 +11,7 @@ The default settings are:
    * Max. N(crest structures)&emsp;&emsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;        :  100                                  (adjustable via '-n')  
    * E-thresh. (rel. to crest min.)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  :  10.0 kJ/mol                          (adjustable via '-e')  
    * Computational model&nbsp;&emsp;&emsp;&emsp;&nbsp;&nbsp;&nbsp;&nbsp;             :  MARIJ-BP86-D3BJ/def2-SVP, closed-s.  (modifiable via '--input': provide custom 'define' input file)  
-   * Turbomole opt. param. (jobex)&nbsp;&nbsp;&nbsp;   :  -c 400 -gcart 4 -energy 7            (modifiable by using '--level 1' and editing of the batch file)    
+   * Turbomole opt. param. (jobex)&nbsp;&nbsp;   :  -c 400 -gcart 4 -energy 7            (modifiable by using '--level 1' and editing of the batch file)    
    * Turbomole scf param.&emsp;&emsp;&emsp;            :  grid m5, conv. 1.d-9                 (adjustable via '--sconv' and '--sgrid)  
    * D3(BJ) disp. correction&emsp;&emsp;&nbsp;         :  switched on                          (use '--nodisp' to switch off)  
    * COSMO solvation model&emsp;&emsp;&nbsp;&nbsp;&nbsp;           :  not included                         (use '--cosmo' to include)  
