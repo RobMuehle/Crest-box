@@ -1,0 +1,101 @@
+#!/bin/bash --login
+#last modified: 26.02.23
+
+#SBATCH -o DEFAULT.%j.%N.out
+#SBATCH -J DEFAULT
+
+#SBATCH --nodes=1
+#SBATCH --ntasks=12
+#SBATCH --ntasks-per-core=1
+#SBATCH --hint=nomultithread
+#SBATCH --mem-per-cpu=50
+
+#SBATCH --time=12:00:00
+#SBATCH -p main
+#SBATCH --qos=prio
+
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=rmueller@zedat.fu-berlin.de
+
+
+#---------------------------
+# Module and input settings
+#---------------------------
+COORDS=xtbopt.xyz
+# 6.3.1 demands "struc.xyz" as input file
+CHARGE="0"
+UHF="0"
+NCI="false"
+NOREF="false"
+
+export XTBHOME=/home/rmueller/prog/xtb/6.5.1
+export XTBPATH=/home/rmueller/prog/xtb/6.5.1:$PATH
+export PATH=$XTBHOME:$PATH
+export PATH=$XTBHOME/bin:$PATH
+
+#module add CREST/2.11-intel-2021a
+#module add xtb/6.4.1-intel-2021a
+
+
+#-----------------------------------------------------------------
+# General settings, temporary directory, and parsing of arguments
+#-----------------------------------------------------------------
+export JOBDIR=`pwd`
+export MKL_NUM_THREADS=${SLURM_NTASKS}
+export OMP_NUM_THREADS=${SLURM_NTASKS},1
+if ! [ -d /scratch/${USER} ]; then mkdir /scratch/${USER}; fi
+
+
+io_status() {
+   tdir=`mktemp -d --tmpdir=${1} 2> /dev/null` \
+   && { rm -rf ${tdir}; return 0; } || { return 1; }
+}
+
+if io_status /scratch/${USER}; then
+   export TEMPDIR=/scratch/${USER}/${SLURM_JOBID}
+else
+   export TEMPDIR=/home/${USER}/${SLURM_JOBID}
+fi
+
+if [[ "${1}" == "--mem" ]]; then
+   if ! [ -d /dev/shm/${USER} ]; then mkdir /dev/shm/${USER}; fi
+   export TEMPDIR=/dev/shm/${USER}/${SLURM_JOBID}
+fi
+
+
+#-------------------
+# Function clean_up
+#-------------------
+clean_up() {
+   cd ${JOBDIR}
+   cp -f  ${TEMPDIR}/*           ${JOBDIR} &> /dev/null
+   cp -f  ${TEMPDIR}/.constrains ${JOBDIR} &> /dev/null
+   cp -f  ${TEMPDIR}/.xcontrol   ${JOBDIR} &> /dev/null
+   rm -rf ${TEMPDIR}
+   rm -f  ${JOBDIR}/tempdir
+   echo -e "\nTemporary data cleared on host ${HOSTNAME}\n"
+}
+
+
+#-----------------------------------------------
+# Create temp. dir., copy data, and create link
+#-----------------------------------------------
+mkdir -p ${TEMPDIR}
+shopt -s extglob
+cp !(*.[0-9]*.*)         ${TEMPDIR} &> /dev/null
+cp ${JOBDIR}/.constrains ${TEMPDIR} &> /dev/null
+cp ${JOBDIR}/.xcontrol   ${TEMPDIR} &> /dev/null
+ln -s ${TEMPDIR} ${JOBDIR}/tempdir
+
+
+#-------------------
+# Start calculation
+#-------------------
+trap clean_up EXIT
+
+if [[ "${NCI}"    == "true" ]]; then NCI="--nci";         else unset NCI;    fi
+if [[ "${NOREF}"  == "true" ]]; then NOREF="--noreftopo"; else unset NOREF;  fi
+
+cd ${TEMPDIR}
+time crest ${COORDS} --chrg ${CHARGE} --uhf ${UHF} ${NCI} ${NOREF} -T ${SLURM_NTASKS} >> ${JOBDIR}/CREST.out 2>> ${JOBDIR}/CREST.out
+

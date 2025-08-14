@@ -1,0 +1,17 @@
+! PBE def2-TZVP TightOPT TightSCF
+! def2/J RIJCOSX
+! D3
+! HUECKEL SlowConv
+
+%maxcore MEM
+
+%scf
+maxiter 900
+end
+
+%pal
+nprocs NPROCS
+end
+
+* xyzfile 0 1 COORDS
+
