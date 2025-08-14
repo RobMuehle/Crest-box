@@ -14,7 +14,6 @@
 #SBATCH --qos=standard
 
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=rmueller@zedat.fu-berlin.de
 
 #SBATCH --array=1478,1480
 
