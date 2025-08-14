@@ -3,7 +3,7 @@ Automation-script for high-level structure reoptimization of an XTB ensemble usi
 
 Prerequisite: XTB and Turbomole/ORCA have to be installed and have to be accessible to the user.
 
-# Main purpose  
+## Main application  
 Extract cartesian coordinates from a XTB or CREST output file ('xtb.trj' or 'crest_conformers.xyz'), and prepare and submit Turbomole or ORCA calculations for each of the extracted structures.
 
 The default mode of execution, which can largely be adjusted by the user, is the extraction of cartesian coordinates until either a preset number of structures has been processed, or a defined energy threshold with respect to the minimum-energy (i.e., first) crest conformer is reached (whichever occurs first). For each structure an optimization using Turbomole/ORCA will be prepared, employing either predefined options and parameters or corresponding user-defined standards. After setup of all calculations is completed, they are submitted as job array to the batch system.  
