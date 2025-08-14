@@ -18,31 +18,4 @@ The default settings are:
 
 Note that there is no test of a correct setup of the calculations when a user-defined input file for the 'define' routine of Turbomole is passed to the script via option '--input'. If in doubt, the option '--level' with parameter '1' can be used (i.e., preparation but no submission) to precheck the outcome of 'define'. If everything is correct, the calculation(s) can be submitted manually using the created batch file (cmd: sbatch|qsub CREST_OPT_ARRAY). Note also that the evaluation routine (--eval) can already be called during runtime to get preliminary results. However, a successfully completed optimization of at least the reference crest structure is a mandatory prerequisite.  
 
-OPTIONS  
-&emsp;      -h | --help           : help screen  
-&emsp;    -man | --man            : extended help screen  
-&emsp;      -q | --quiet          : supress standard screen output  
-&emsp;     -n <int>               : maximum number of processed crest structures (default: 15)  
-&emsp;     -nf <int>              : enforce processing of <int> crest structures, ignoring any given energy threshold  
-&emsp;     -ns | --n_start <int>  : process crest structures starting with the <int>-th entry  
-&emsp;     -e <float>             : crest energy threshold (in kJ/mol) for the extraction of structures (default: 10.0) E_rel calculated with reference to the minimum-energy (i.e., first) crest structure  
-&emsp;     -ef <float>            : enforce processing of structures until energy threshold <float> (in kJ/mol) is reached  
-&emsp;      -i | --input <string> : use local input file <string> for 'define' sessions (default: standard-input)  
-&emsp;     -pi | --print_i        : print standard input for 'define' to file 'input'  
-&emsp;    -lvl | --level <int>    : level of processing (default: 1)  
-                               0 = only extract crest structures to individual xyz files  
-                               1 = extract crest structures and prepare calculations, but do not submit them to the queueing system; recommended for prechecking the outcome of 'define' and/or manually adjusting the batch file 'CREST_OPT_ARRAY' prior to submission  
-                               2 = extract crest structures, prepare and submit calculations  
-    -nod | --nodisp          : turn off inclusion of D3(BJ) dispersion correction  
-           --cosmo <float>   : include COSMO solvation with epsilon value <float>  
-           --sconv <int>     : set convergence threshold 1.d-X for the SCF iterations; the default value is X = 9  
-           --sgrid [m]<int>  : set DFT grid size [m]X; the default grid is a modified type grid with X = 5, i.e., m5  
-     -pi | --print_n <int>   : print E_rel for the first <int> crest structures to screen  
-     -pe | --print_e <float> : print E_rel for crest structures to screen until threshold <float> (in kJ/mol) is reached  
-           --nosort          : omit additional sorting of conformers (with respect to DFT E_rel energies) when performing '--eval'  
-    -ref | --reference       : set reference structure for the calculation of relative DFT energies when performing '--eval' (default: 1)  
-   -eval | --eval <string>   : perform a (re-)evaluation of the conformer optimizations (during or post runtime) (default: extra)  
-                               sparse = evaluate E_rel only  
-                               normal = evaluate E_rel and write optimized structures to file  
-                               extra  = evaluate E_rel, write optimized structures to file, and create Molden input files  
-    -orca | --orca            : use ORCA instead of Turbomole  
+Program options can be displayed by calling 'Crest-box --help'. 
